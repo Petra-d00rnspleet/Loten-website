@@ -11,52 +11,65 @@
   }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, sans-serif; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:28px; width:100%; max-width:440px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:28px; width:100%; max-width:460px; }
   h1 { margin:0 0 8px; font-size:1.6rem; }
+  h2 { margin:24px 0 8px; font-size:1.05rem; }
   p { color:var(--muted); line-height:1.5; }
   input { width:100%; padding:12px; margin:6px 0; border:1px solid var(--line); border-radius:10px; font-size:1rem; background:var(--bg); color:var(--text); }
   button { width:100%; padding:13px; margin-top:10px; border:0; border-radius:10px; font-size:1rem; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }
+  button:disabled { opacity:.6; cursor:default; }
   button.second { background:transparent; color:var(--text); border:1px solid var(--line); }
   .error { color:var(--accent); min-height:1.2em; margin:6px 0 0; font-size:.9rem; }
   .lot { font-size:2.2rem; font-weight:800; text-align:center; padding:24px 0; color:var(--accent); word-break:break-word; }
+  .panel { border:1px solid var(--line); border-radius:12px; padding:6px 14px; background:var(--bg); }
+  .group { display:flex; justify-content:space-between; align-items:center; gap:10px; width:100%; margin:0; padding:12px 0; background:none; color:var(--text); border:0; border-bottom:1px solid var(--line); border-radius:0; text-align:left; font-weight:500; }
+  .group:last-child { border-bottom:0; }
+  .group .count { color:var(--accent); font-weight:700; white-space:nowrap; font-size:.9rem; }
+  .empty { color:var(--muted); padding:10px 0; font-size:.95rem; }
+  .big { font-size:1.3rem; font-weight:700; color:var(--accent); margin:4px 0 12px; }
   ul { list-style:none; padding:0; margin:12px 0 0; }
-  li { padding:10px 0; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; }
+  li { padding:10px 0; border-bottom:1px solid var(--line); }
   li:last-child { border:0; }
-  .done { color:var(--muted); font-size:.9rem; }
   .hidden { display:none; }
 </style>
 </head>
 <body>
 <div class="card">
 
-  <!-- 1. Start -->
+  <!-- 1. Start + al gemaakte groepen -->
   <section id="s-start">
     <h1>🎁 Lootjes trekken</h1>
-    <p>Maak een groep, deel de link en laat iedereen een lot trekken.</p>
+    <p id="start-msg">Maak een groep, deel de link en laat iedereen een lot trekken.</p>
     <button id="btn-create">Lotengroep maken</button>
+    <h2>Al gemaakte groepen</h2>
+    <div class="panel" id="my-groups"></div>
   </section>
 
   <!-- 2. Namen invoeren -->
   <section id="s-names" class="hidden">
-    <h1>Wie doen er mee?</h1>
-    <p>Schrijf alle namen op (minimaal 3).</p>
+    <h1>Nieuwe lotengroep</h1>
+    <input id="group-title" placeholder="Naam van de groep (bijv. Sinterklaas)" autocomplete="off">
+    <p>Schrijf alle namen op die meedoen (minimaal 3).</p>
     <div id="name-inputs"></div>
     <button class="second" id="btn-add">+ Naam toevoegen</button>
     <p class="error" id="err-names"></p>
-    <button id="btn-next">Volgende</button>
+    <button id="btn-save">Opslaan</button>
+    <button class="second" id="btn-cancel">Terug</button>
   </section>
 
-  <!-- 3. Link delen -->
+  <!-- 3. Groep: link delen + aantal getrokken -->
   <section id="s-share" class="hidden">
-    <h1>Deel deze link</h1>
-    <p>Stuur de link naar alle deelnemers. Iedereen vult zijn eigen naam in en trekt een lot.</p>
+    <h1 id="share-title">Groep</h1>
+    <div class="big" id="share-count">…</div>
+    <p>Stuur deze link naar alle deelnemers. Iedereen vult zijn eigen naam in en trekt een lot.</p>
     <input id="share-link" readonly>
     <button id="btn-copy">Link kopiëren</button>
+    <button class="second" id="btn-back">Terug naar alle groepen</button>
   </section>
 
   <!-- 4. Naam invoeren -->
   <section id="s-join" class="hidden">
-    <h1>Wie ben jij?</h1>
+    <h1 id="join-title">Wie ben jij?</h1>
     <p>Vul je naam in om je lot te trekken.</p>
     <input id="my-name" placeholder="Jouw naam" autocomplete="off">
     <p class="error" id="err-join"></p>
@@ -74,7 +87,7 @@
   <!-- 6. Deelnemers -->
   <section id="s-people" class="hidden">
     <h1>Deelnemers</h1>
-    <p>Wie heeft zijn lot al getrokken?</p>
+    <div class="big" id="people-count"></div>
     <ul id="people"></ul>
   </section>
 
@@ -93,36 +106,106 @@
   };
   // =====================================================
 
-  firebase.initializeApp(firebaseConfig);
-  const db = firebase.database();
   const $ = id => document.getElementById(id);
   const groupId = new URLSearchParams(location.search).get("g");
-  let group = null;
+  let db = null, group = null, offs = [];
 
+  const configured = !/JOUW/.test(firebaseConfig.apiKey + firebaseConfig.databaseURL);
+  if (configured) {
+    try { firebase.initializeApp(firebaseConfig); db = firebase.database(); }
+    catch (e) { console.error(e); }
+  }
+
+  // ---------- Hulpfuncties ----------
   function show(id) {
+    offs.forEach(f => { try { f(); } catch (e) {} });   // oude live-luisteraars stoppen
+    offs = [];
     document.querySelectorAll("section").forEach(s => s.classList.add("hidden"));
     $(id).classList.remove("hidden");
   }
+  function listen(ref, cb) {
+    const handler = ref.on("value", cb);
+    offs.push(() => ref.off("value", handler));
+  }
+  const countTrue = v => v ? Object.values(v).filter(Boolean).length : 0;
+  function getMine() {
+    try { return JSON.parse(localStorage.getItem("mijn-groepen") || "[]"); } catch (e) { return []; }
+  }
+  function setMine(list) {
+    try { localStorage.setItem("mijn-groepen", JSON.stringify(list)); } catch (e) {}
+  }
+  function groupLink(id) {
+    return location.href.split("?")[0].split("#")[0] + "?g=" + id;
+  }
+
+  // ---------- Startscherm: al gemaakte groepen ----------
+  function showStart() {
+    show("s-start");
+    const box = $("my-groups");
+    box.innerHTML = "";
+    const mine = getMine();
+    if (!mine.length) {
+      const d = document.createElement("div");
+      d.className = "empty";
+      d.textContent = "Nog geen groepen gemaakt.";
+      box.appendChild(d);
+      return;
+    }
+    mine.slice().reverse().forEach(g => {
+      const btn = document.createElement("button");
+      btn.className = "group";
+      const name = document.createElement("span"); name.textContent = g.title;
+      const count = document.createElement("span"); count.className = "count";
+      count.textContent = "… van " + g.n;
+      btn.append(name, count);
+      btn.onclick = () => openGroup(g);
+      box.appendChild(btn);
+      if (db) listen(db.ref("groups/" + g.id + "/drawn"), snap => {
+        count.textContent = countTrue(snap.val()) + " van " + g.n + " getrokken";
+      });
+      else count.textContent = g.n + " namen";
+    });
+  }
+
+  function openGroup(g) {
+    show("s-share");
+    $("share-title").textContent = g.title;
+    $("share-link").value = groupLink(g.id);
+    $("btn-copy").textContent = "Link kopiëren";
+    $("share-count").textContent = "…";
+    if (db) listen(db.ref("groups/" + g.id + "/drawn"), snap => {
+      $("share-count").textContent = countTrue(snap.val()) + " van " + g.n + " lootjes getrokken";
+    });
+  }
 
   // ---------- Groep maken ----------
-  function addNameInput(value = "") {
+  function addNameInput() {
     const input = document.createElement("input");
     input.placeholder = "Naam";
-    input.value = value;
     input.autocomplete = "off";
     $("name-inputs").appendChild(input);
-    input.focus();
+    return input;
   }
 
   $("btn-create").onclick = () => {
+    if (!db) {
+      $("start-msg").textContent = "Vul eerst je Firebase-gegevens in bovenin het script van index.html.";
+      return;
+    }
     show("s-names");
+    $("group-title").value = "";
+    $("err-names").textContent = "";
     $("name-inputs").innerHTML = "";
     addNameInput(); addNameInput(); addNameInput();
+    $("btn-save").disabled = false;
+    $("btn-save").textContent = "Opslaan";
   };
-  $("btn-add").onclick = () => addNameInput();
+  $("btn-add").onclick = () => addNameInput().focus();
+  $("btn-cancel").onclick = showStart;
+  $("btn-back").onclick = showStart;
 
-  // Geen twee dezelfde namen mogelijk: elk lot is een andere persoon en niemand trekt zichzelf.
-  // We maken één willekeurige "kring": A trekt B, B trekt C, ... laatste trekt A.
+  // Eén willekeurige kring: A trekt B, B trekt C, ..., laatste trekt A.
+  // Zo trekt niemand zichzelf en wordt elke naam precies één keer getrokken.
   function makeAssignments(n) {
     const order = [...Array(n).keys()];
     for (let i = n - 1; i > 0; i--) {
@@ -134,57 +217,81 @@
     return assign;
   }
 
-  $("btn-next").onclick = async () => {
+  $("btn-save").onclick = async () => {
     const names = [...$("name-inputs").querySelectorAll("input")]
       .map(i => i.value.trim()).filter(Boolean);
-    const unique = new Set(names.map(n => n.toLowerCase()));
+    const title = $("group-title").value.trim() || "Lootjes";
     if (names.length < 3) { $("err-names").textContent = "Vul minimaal 3 namen in."; return; }
-    if (unique.size !== names.length) { $("err-names").textContent = "Er staan twee dezelfde namen in de lijst."; return; }
+    if (new Set(names.map(n => n.toLowerCase())).size !== names.length) {
+      $("err-names").textContent = "Er staan twee dezelfde namen in de lijst."; return;
+    }
+    $("err-names").textContent = "";
+    $("btn-save").disabled = true;
+    $("btn-save").textContent = "Bezig met opslaan…";
     try {
       const id = db.ref("groups").push().key;
       await db.ref("groups/" + id).set({
+        title: title,
         names: names,
         assign: makeAssignments(names.length),
         created: firebase.database.ServerValue.TIMESTAMP
       });
-      $("share-link").value = location.origin + location.pathname + "?g=" + id;
-      show("s-share");
+      const g = { id: id, title: title, n: names.length };
+      setMine(getMine().concat(g));
+      openGroup(g);
     } catch (e) {
       $("err-names").textContent = "Opslaan mislukt: " + e.message;
+      $("btn-save").disabled = false;
+      $("btn-save").textContent = "Opslaan";
     }
   };
 
   $("btn-copy").onclick = async () => {
-    $("share-link").select();
-    try { await navigator.clipboard.writeText($("share-link").value); } catch (e) { document.execCommand("copy"); }
+    const input = $("share-link");
+    input.select();
+    try { await navigator.clipboard.writeText(input.value); }
+    catch (e) { try { document.execCommand("copy"); } catch (e2) {} }
     $("btn-copy").textContent = "Gekopieerd ✓";
   };
 
   // ---------- Deelnemen via link ----------
   async function initJoin() {
-    const snap = await db.ref("groups/" + groupId).once("value");
-    group = snap.val();
-    if (!group) {
-      show("s-start");
-      document.querySelector("#s-start p").textContent = "Deze groep bestaat niet (meer). Maak een nieuwe aan.";
+    show("s-join");
+    if (!db) {
+      $("err-join").textContent = "De website is nog niet gekoppeld aan Firebase.";
+      $("btn-go").disabled = true;
       return;
     }
-    const saved = localStorage.getItem("lot-" + groupId);
+    try {
+      const snap = await db.ref("groups/" + groupId).once("value");
+      group = snap.val();
+    } catch (e) {
+      $("err-join").textContent = "Kon de groep niet laden: " + e.message;
+      return;
+    }
+    if (!group) {
+      showStart();
+      $("start-msg").textContent = "Deze groep bestaat niet (meer). Maak een nieuwe aan.";
+      return;
+    }
+    $("join-title").textContent = group.title || "Wie ben jij?";
+    let saved = null;
+    try { saved = localStorage.getItem("lot-" + groupId); } catch (e) {}
     if (saved) $("my-name").value = saved;
-    show("s-join");
   }
 
-  $("btn-go").onclick = async () => {
+  async function startDraw() {
+    if (!group) return;
     const typed = $("my-name").value.trim().toLowerCase();
     const me = group.names.findIndex(n => n.toLowerCase() === typed);
     if (me === -1) { $("err-join").textContent = "Deze naam staat niet in de groep. Check de spelling."; return; }
+    $("err-join").textContent = "";
+    try { localStorage.setItem("lot-" + groupId, group.names[me]); } catch (e) {}
 
-    localStorage.setItem("lot-" + groupId, group.names[me]);
     const result = group.names[group.assign[me]];
     show("s-lot");
     $("btn-continue").classList.add("hidden");
 
-    // Kleine wisselanimatie
     let ticks = 0;
     const timer = setInterval(async () => {
       $("lot-name").textContent = group.names[Math.floor(Math.random() * group.names.length)];
@@ -192,28 +299,30 @@
         clearInterval(timer);
         $("lot-name").textContent = result;
         $("btn-continue").classList.remove("hidden");
-        try { await db.ref("groups/" + groupId + "/drawn/" + me).set(true); } catch (e) {}
+        try { await db.ref("groups/" + groupId + "/drawn/" + me).set(true); } catch (e) { console.error(e); }
       }
     }, 90);
-  };
+  }
+  $("btn-go").onclick = startDraw;
+  $("my-name").addEventListener("keydown", e => { if (e.key === "Enter") startDraw(); });
 
   $("btn-continue").onclick = () => {
     show("s-people");
-    db.ref("groups/" + groupId).on("value", snap => {
+    listen(db.ref("groups/" + groupId), snap => {
       const g = snap.val(); if (!g) return;
-      const list = $("people"); list.innerHTML = "";
-      g.names.forEach((name, i) => {
+      $("people-count").textContent = countTrue(g.drawn) + " van " + g.names.length + " lootjes getrokken";
+      const list = $("people");
+      list.innerHTML = "";
+      g.names.forEach(name => {
         const li = document.createElement("li");
-        const a = document.createElement("span"); a.textContent = name;
-        const b = document.createElement("span"); b.className = "done";
-        b.textContent = (g.drawn && g.drawn[i]) ? "heeft getrokken ✓" : "nog niet";
-        li.append(a, b); list.appendChild(li);
+        li.textContent = name;
+        list.appendChild(li);
       });
     });
   };
 
   // ---------- Start ----------
-  if (groupId) initJoin(); else show("s-start");
+  if (groupId) initJoin(); else showStart();
 </script>
 </body>
 </html>
