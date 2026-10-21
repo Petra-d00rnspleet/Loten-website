@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lootjes trekken</title>
+<style>
+  :root { --bg:#f6f3ee; --card:#fff; --text:#222; --muted:#777; --accent:#c0392b; --line:#e3ddd2; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1b1a19; --card:#262422; --text:#f1ede6; --muted:#a39d92; --accent:#e5594a; --line:#3a3733; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, sans-serif; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:28px; width:100%; max-width:440px; }
+  h1 { margin:0 0 8px; font-size:1.6rem; }
+  p { color:var(--muted); line-height:1.5; }
+  input { width:100%; padding:12px; margin:6px 0; border:1px solid var(--line); border-radius:10px; font-size:1rem; background:var(--bg); color:var(--text); }
+  button { width:100%; padding:13px; margin-top:10px; border:0; border-radius:10px; font-size:1rem; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }
+  button.second { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .error { color:var(--accent); min-height:1.2em; margin:6px 0 0; font-size:.9rem; }
+  .lot { font-size:2.2rem; font-weight:800; text-align:center; padding:24px 0; color:var(--accent); word-break:break-word; }
+  ul { list-style:none; padding:0; margin:12px 0 0; }
+  li { padding:10px 0; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; }
+  li:last-child { border:0; }
+  .done { color:var(--muted); font-size:.9rem; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<div class="card">
+
+  <!-- 1. Start -->
+  <section id="s-start">
+    <h1>🎁 Lootjes trekken</h1>
+    <p>Maak een groep, deel de link en laat iedereen een lot trekken.</p>
+    <button id="btn-create">Lotengroep maken</button>
+  </section>
+
+  <!-- 2. Namen invoeren -->
+  <section id="s-names" class="hidden">
+    <h1>Wie doen er mee?</h1>
+    <p>Schrijf alle namen op (minimaal 3).</p>
+    <div id="name-inputs"></div>
+    <button class="second" id="btn-add">+ Naam toevoegen</button>
+    <p class="error" id="err-names"></p>
+    <button id="btn-next">Volgende</button>
+  </section>
+
+  <!-- 3. Link delen -->
+  <section id="s-share" class="hidden">
+    <h1>Deel deze link</h1>
+    <p>Stuur de link naar alle deelnemers. Iedereen vult zijn eigen naam in en trekt een lot.</p>
+    <input id="share-link" readonly>
+    <button id="btn-copy">Link kopiëren</button>
+  </section>
+
+  <!-- 4. Naam invoeren -->
+  <section id="s-join" class="hidden">
+    <h1>Wie ben jij?</h1>
+    <p>Vul je naam in om je lot te trekken.</p>
+    <input id="my-name" placeholder="Jouw naam" autocomplete="off">
+    <p class="error" id="err-join"></p>
+    <button id="btn-go">Door</button>
+  </section>
+
+  <!-- 5. Lot -->
+  <section id="s-lot" class="hidden">
+    <h1>Dit is jouw lot</h1>
+    <div class="lot" id="lot-name">…</div>
+    <p>Hou het geheim! 🤫</p>
+    <button id="btn-continue" class="hidden">Verder</button>
+  </section>
+
+  <!-- 6. Deelnemers -->
+  <section id="s-people" class="hidden">
+    <h1>Deelnemers</h1>
+    <p>Wie heeft zijn lot al getrokken?</p>
+    <ul id="people"></ul>
+  </section>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script>
+  // ====== VUL HIER JE EIGEN FIREBASE-GEGEVENS IN ======
+  const firebaseConfig = {
+    apiKey: "JOUW_API_KEY",
+    authDomain: "JOUW_PROJECT.firebaseapp.com",
+    databaseURL: "https://JOUW_PROJECT-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "JOUW_PROJECT",
+    appId: "JOUW_APP_ID"
+  };
+  // =====================================================
+
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+  const $ = id => document.getElementById(id);
+  const groupId = new URLSearchParams(location.search).get("g");
+  let group = null;
+
+  function show(id) {
+    document.querySelectorAll("section").forEach(s => s.classList.add("hidden"));
+    $(id).classList.remove("hidden");
+  }
+
+  // ---------- Groep maken ----------
+  function addNameInput(value = "") {
+    const input = document.createElement("input");
+    input.placeholder = "Naam";
+    input.value = value;
+    input.autocomplete = "off";
+    $("name-inputs").appendChild(input);
+    input.focus();
+  }
+
+  $("btn-create").onclick = () => {
+    show("s-names");
+    $("name-inputs").innerHTML = "";
+    addNameInput(); addNameInput(); addNameInput();
+  };
+  $("btn-add").onclick = () => addNameInput();
+
+  // Geen twee dezelfde namen mogelijk: elk lot is een andere persoon en niemand trekt zichzelf.
+  // We maken één willekeurige "kring": A trekt B, B trekt C, ... laatste trekt A.
+  function makeAssignments(n) {
+    const order = [...Array(n).keys()];
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    const assign = {};
+    order.forEach((person, k) => { assign[person] = order[(k + 1) % n]; });
+    return assign;
+  }
+
+  $("btn-next").onclick = async () => {
+    const names = [...$("name-inputs").querySelectorAll("input")]
+      .map(i => i.value.trim()).filter(Boolean);
+    const unique = new Set(names.map(n => n.toLowerCase()));
+    if (names.length < 3) { $("err-names").textContent = "Vul minimaal 3 namen in."; return; }
+    if (unique.size !== names.length) { $("err-names").textContent = "Er staan twee dezelfde namen in de lijst."; return; }
+    try {
+      const id = db.ref("groups").push().key;
+      await db.ref("groups/" + id).set({
+        names: names,
+        assign: makeAssignments(names.length),
+        created: firebase.database.ServerValue.TIMESTAMP
+      });
+      $("share-link").value = location.origin + location.pathname + "?g=" + id;
+      show("s-share");
+    } catch (e) {
+      $("err-names").textContent = "Opslaan mislukt: " + e.message;
+    }
+  };
+
+  $("btn-copy").onclick = async () => {
+    $("share-link").select();
+    try { await navigator.clipboard.writeText($("share-link").value); } catch (e) { document.execCommand("copy"); }
+    $("btn-copy").textContent = "Gekopieerd ✓";
+  };
+
+  // ---------- Deelnemen via link ----------
+  async function initJoin() {
+    const snap = await db.ref("groups/" + groupId).once("value");
+    group = snap.val();
+    if (!group) {
+      show("s-start");
+      document.querySelector("#s-start p").textContent = "Deze groep bestaat niet (meer). Maak een nieuwe aan.";
+      return;
+    }
+    const saved = localStorage.getItem("lot-" + groupId);
+    if (saved) $("my-name").value = saved;
+    show("s-join");
+  }
+
+  $("btn-go").onclick = async () => {
+    const typed = $("my-name").value.trim().toLowerCase();
+    const me = group.names.findIndex(n => n.toLowerCase() === typed);
+    if (me === -1) { $("err-join").textContent = "Deze naam staat niet in de groep. Check de spelling."; return; }
+
+    localStorage.setItem("lot-" + groupId, group.names[me]);
+    const result = group.names[group.assign[me]];
+    show("s-lot");
+    $("btn-continue").classList.add("hidden");
+
+    // Kleine wisselanimatie
+    let ticks = 0;
+    const timer = setInterval(async () => {
+      $("lot-name").textContent = group.names[Math.floor(Math.random() * group.names.length)];
+      if (++ticks >= 14) {
+        clearInterval(timer);
+        $("lot-name").textContent = result;
+        $("btn-continue").classList.remove("hidden");
+        try { await db.ref("groups/" + groupId + "/drawn/" + me).set(true); } catch (e) {}
+      }
+    }, 90);
+  };
+
+  $("btn-continue").onclick = () => {
+    show("s-people");
+    db.ref("groups/" + groupId).on("value", snap => {
+      const g = snap.val(); if (!g) return;
+      const list = $("people"); list.innerHTML = "";
+      g.names.forEach((name, i) => {
+        const li = document.createElement("li");
+        const a = document.createElement("span"); a.textContent = name;
+        const b = document.createElement("span"); b.className = "done";
+        b.textContent = (g.drawn && g.drawn[i]) ? "heeft getrokken ✓" : "nog niet";
+        li.append(a, b); list.appendChild(li);
+      });
+    });
+  };
+
+  // ---------- Start ----------
+  if (groupId) initJoin(); else show("s-start");
+</script>
+</body>
+</html>
