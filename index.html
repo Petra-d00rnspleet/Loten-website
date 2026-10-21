@@ -18,6 +18,7 @@
   input { width:100%; padding:12px; margin:6px 0; border:1px solid var(--line); border-radius:10px; font-size:1rem; background:var(--bg); color:var(--text); }
   button { width:100%; padding:13px; margin-top:10px; border:0; border-radius:10px; font-size:1rem; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }
   button:disabled { opacity:.6; cursor:default; }
+  button.danger { background:transparent; color:var(--accent); border:1px solid var(--accent); }
   button.second { background:transparent; color:var(--text); border:1px solid var(--line); }
   .error { color:var(--accent); min-height:1.2em; margin:6px 0 0; font-size:.9rem; }
   .lot { font-size:2.2rem; font-weight:800; text-align:center; padding:24px 0; color:var(--accent); word-break:break-word; }
@@ -64,7 +65,9 @@
     <p>Stuur deze link naar alle deelnemers. Iedereen vult zijn eigen naam in en trekt een lot.</p>
     <input id="share-link" readonly>
     <button id="btn-copy">Link kopiëren</button>
+    <p class="error" id="err-share"></p>
     <button class="second" id="btn-back">Terug naar alle groepen</button>
+    <button class="danger" id="btn-delete">Groep verwijderen</button>
   </section>
 
   <!-- 4. Naam invoeren -->
@@ -95,14 +98,15 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script>
   // ====== VUL HIER JE EIGEN FIREBASE-GEGEVENS IN ======
   const firebaseConfig = {
-    apiKey: "JOUW_API_KEY",
-    authDomain: "JOUW_PROJECT.firebaseapp.com",
-    databaseURL: "https://JOUW_PROJECT-default-rtdb.europe-west1.firebasedatabase.app",
-    projectId: "JOUW_PROJECT",
-    appId: "JOUW_APP_ID"
+    apiKey: "AIzaSyDzImUsLNbmj6PpNBCrnrCu3ns_K8F6zUk",
+    authDomain: "lotenwebsite.firebaseapp.com",
+    databaseURL: "https://lotenwebsite-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "lotenwebsite",
+    appId: "1:716187432239:web:fefbac3acc8d19c41addda"
   };
   // =====================================================
 
@@ -111,9 +115,14 @@
   let db = null, group = null, offs = [];
 
   const configured = !/JOUW/.test(firebaseConfig.apiKey + firebaseConfig.databaseURL);
+  let authReady = Promise.resolve(), currentGroup = null;
   if (configured) {
-    try { firebase.initializeApp(firebaseConfig); db = firebase.database(); }
-    catch (e) { console.error(e); }
+    try {
+      firebase.initializeApp(firebaseConfig);
+      db = firebase.database();
+      // Anoniem inloggen: zo weet de database wie de eigenaar van een groep is
+      authReady = firebase.auth().signInAnonymously().catch(e => console.error(e));
+    } catch (e) { console.error(e); }
   }
 
   // ---------- Hulpfuncties ----------
@@ -169,6 +178,8 @@
 
   function openGroup(g) {
     show("s-share");
+    currentGroup = g;
+    $("err-share").textContent = "";
     $("share-title").textContent = g.title;
     $("share-link").value = groupLink(g.id);
     $("btn-copy").textContent = "Link kopiëren";
@@ -229,8 +240,12 @@
     $("btn-save").disabled = true;
     $("btn-save").textContent = "Bezig met opslaan…";
     try {
+      await authReady;
+      const user = firebase.auth().currentUser;
+      if (!user) throw new Error("Inloggen mislukt. Zet in Firebase bij Authentication de 'Anoniem'-aanmelding aan.");
       const id = db.ref("groups").push().key;
       await db.ref("groups/" + id).set({
+        owner: user.uid,
         title: title,
         names: names,
         assign: makeAssignments(names.length),
@@ -243,6 +258,33 @@
       $("err-names").textContent = "Opslaan mislukt: " + e.message;
       $("btn-save").disabled = false;
       $("btn-save").textContent = "Opslaan";
+    }
+  };
+
+  function removeFromList(id) {
+    setMine(getMine().filter(g => g.id !== id));
+    showStart();
+  }
+
+  $("btn-delete").onclick = async () => {
+    const g = currentGroup;
+    if (!g) return;
+    if (!confirm('Groep "' + g.title + '" verwijderen? De link werkt daarna voor niemand meer.')) return;
+    $("btn-delete").disabled = true;
+    $("err-share").textContent = "";
+    try {
+      await authReady;
+      await db.ref("groups/" + g.id).remove();
+      removeFromList(g.id);
+    } catch (e) {
+      // Oude groepen (zonder eigenaar) kunnen niet uit de database; dan alleen uit de lijst halen
+      if (confirm("Verwijderen uit de database is niet gelukt (" + e.message + "). Alleen uit je lijst halen?")) {
+        removeFromList(g.id);
+      } else {
+        $("err-share").textContent = "Niet verwijderd: " + e.message;
+      }
+    } finally {
+      $("btn-delete").disabled = false;
     }
   };
 
