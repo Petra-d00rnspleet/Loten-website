@@ -98,11 +98,11 @@
 <script>
   // ====== VUL HIER JE EIGEN FIREBASE-GEGEVENS IN ======
   const firebaseConfig = {
-    apiKey: "AIzaSyDzImUsLNbmj6PpNBCrnrCu3ns_K8F6zUk",
-    authDomain: "lotenwebsite.firebaseapp.com",
-    databaseURL: "https://lotenwebsite-default-rtdb.europe-west1.firebasedatabase.app",
-    projectId: "lotenwebsite",
-    appId: "1:716187432239:web:fefbac3acc8d19c41addda"
+    apiKey: "JOUW_API_KEY",
+    authDomain: "JOUW_PROJECT.firebaseapp.com",
+    databaseURL: "https://JOUW_PROJECT-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "JOUW_PROJECT",
+    appId: "JOUW_APP_ID"
   };
   // =====================================================
 
@@ -160,7 +160,7 @@
       btn.append(name, count);
       btn.onclick = () => openGroup(g);
       box.appendChild(btn);
-      if (db) listen(db.ref("groups/" + g.id + "/drawn"), snap => {
+      if (db) listen(db.ref("groups/" + g.id + "/claims"), snap => {
         count.textContent = countTrue(snap.val()) + " van " + g.n + " getrokken";
       });
       else count.textContent = g.n + " namen";
@@ -173,7 +173,7 @@
     $("share-link").value = groupLink(g.id);
     $("btn-copy").textContent = "Link kopiëren";
     $("share-count").textContent = "…";
-    if (db) listen(db.ref("groups/" + g.id + "/drawn"), snap => {
+    if (db) listen(db.ref("groups/" + g.id + "/claims"), snap => {
       $("share-count").textContent = countTrue(snap.val()) + " van " + g.n + " lootjes getrokken";
     });
   }
@@ -275,33 +275,72 @@
       return;
     }
     $("join-title").textContent = group.title || "Wie ben jij?";
-    let saved = null;
-    try { saved = localStorage.getItem("lot-" + groupId); } catch (e) {}
-    if (saved) $("my-name").value = saved;
+    const claims = group.claims || {};
+    for (const k of Object.keys(claims)) {
+      if (claims[k] === deviceId) $("my-name").value = group.names[Number(k)];
+    }
   }
+
+  // Elk apparaat krijgt een eigen ID. Een naam kan maar door één apparaat worden gekozen,
+  // en een apparaat kan maar één naam kiezen. Dat wordt in de database afgedwongen.
+  function getDeviceId() {
+    let id = null;
+    try { id = localStorage.getItem("apparaat-id"); } catch (e) {}
+    if (!id) {
+      id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+         : Date.now() + "-" + Math.random().toString(36).slice(2);
+      try { localStorage.setItem("apparaat-id", id); } catch (e) {}
+    }
+    return id;
+  }
+  const deviceId = getDeviceId();
 
   async function startDraw() {
     if (!group) return;
-    const typed = $("my-name").value.trim().toLowerCase();
-    const me = group.names.findIndex(n => n.toLowerCase() === typed);
-    if (me === -1) { $("err-join").textContent = "Deze naam staat niet in de groep. Check de spelling."; return; }
+    const btn = $("btn-go");
+    btn.disabled = true;
     $("err-join").textContent = "";
-    try { localStorage.setItem("lot-" + groupId, group.names[me]); } catch (e) {}
+    try {
+      const snap = await db.ref("groups/" + groupId).once("value");
+      group = snap.val();
+      if (!group) throw new Error("Groep niet gevonden.");
 
-    const result = group.names[group.assign[me]];
-    show("s-lot");
-    $("btn-continue").classList.add("hidden");
+      // Heeft dit apparaat al een naam gekozen? Dan krijg je altijd datzelfde lot terug.
+      const claims = group.claims || {};
+      let me = -1;
+      for (const k of Object.keys(claims)) if (claims[k] === deviceId) me = Number(k);
 
-    let ticks = 0;
-    const timer = setInterval(async () => {
-      $("lot-name").textContent = group.names[Math.floor(Math.random() * group.names.length)];
-      if (++ticks >= 14) {
-        clearInterval(timer);
-        $("lot-name").textContent = result;
-        $("btn-continue").classList.remove("hidden");
-        try { await db.ref("groups/" + groupId + "/drawn/" + me).set(true); } catch (e) { console.error(e); }
+      if (me === -1) {
+        const typed = $("my-name").value.trim().toLowerCase();
+        me = group.names.findIndex(n => n.toLowerCase() === typed);
+        if (me === -1) { $("err-join").textContent = "Deze naam staat niet in de groep. Check de spelling."; return; }
+        // Naam vastleggen: lukt maar voor één apparaat (veilig bij tegelijk klikken)
+        const res = await db.ref("groups/" + groupId + "/claims/" + me)
+          .transaction(cur => (cur === null ? deviceId : undefined));
+        if (res.snapshot.val() !== deviceId) {
+          $("err-join").textContent = "Deze naam is al gekozen op een ander apparaat. Kies je eigen naam.";
+          return;
+        }
       }
-    }, 90);
+
+      $("my-name").value = group.names[me];
+      const result = group.names[group.assign[me]];
+      show("s-lot");
+      $("btn-continue").classList.add("hidden");
+      let ticks = 0;
+      const timer = setInterval(() => {
+        $("lot-name").textContent = group.names[Math.floor(Math.random() * group.names.length)];
+        if (++ticks >= 14) {
+          clearInterval(timer);
+          $("lot-name").textContent = result;
+          $("btn-continue").classList.remove("hidden");
+        }
+      }, 90);
+    } catch (e) {
+      $("err-join").textContent = "Er ging iets mis: " + e.message;
+    } finally {
+      btn.disabled = false;
+    }
   }
   $("btn-go").onclick = startDraw;
   $("my-name").addEventListener("keydown", e => { if (e.key === "Enter") startDraw(); });
@@ -310,7 +349,7 @@
     show("s-people");
     listen(db.ref("groups/" + groupId), snap => {
       const g = snap.val(); if (!g) return;
-      $("people-count").textContent = countTrue(g.drawn) + " van " + g.names.length + " lootjes getrokken";
+      $("people-count").textContent = countTrue(g.claims) + " van " + g.names.length + " lootjes getrokken";
       const list = $("people");
       list.innerHTML = "";
       g.names.forEach(name => {
