@@ -15,7 +15,7 @@
   h1 { margin:0 0 8px; font-size:1.6rem; }
   h2 { margin:24px 0 8px; font-size:1.05rem; }
   p { color:var(--muted); line-height:1.5; }
-  input, textarea { width:100%; font-family:inherit; padding:12px; margin:6px 0; border:1px solid var(--line); border-radius:10px; font-size:1rem; background:var(--bg); color:var(--text); }
+  input { width:100%; padding:12px; margin:6px 0; border:1px solid var(--line); border-radius:10px; font-size:1rem; background:var(--bg); color:var(--text); }
   button { width:100%; padding:13px; margin-top:10px; border:0; border-radius:10px; font-size:1rem; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }
   button:disabled { opacity:.6; cursor:default; }
   button.danger { background:transparent; color:var(--accent); border:1px solid var(--accent); }
@@ -31,13 +31,6 @@
   ul { list-style:none; padding:0; margin:12px 0 0; }
   li { padding:10px 0; border-bottom:1px solid var(--line); }
   li:last-child { border:0; }
-  textarea { min-height:90px; resize:vertical; }
-  label { display:block; margin:14px 0 2px; font-weight:600; font-size:.95rem; }
-  .info { border:1px solid var(--line); border-radius:12px; padding:12px 14px; background:var(--bg); margin-top:6px; }
-  .info .q { color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; margin:10px 0 2px; }
-  .info .q:first-child { margin-top:0; }
-  .info .a { white-space:pre-wrap; word-break:break-word; line-height:1.45; }
-  .info .wait { color:var(--muted); line-height:1.45; }
   .hidden { display:none; }
 </style>
 </head>
@@ -86,33 +79,17 @@
     <button id="btn-go">Door</button>
   </section>
 
-  <!-- 4b. Vragen over jezelf -->
-  <section id="s-profile" class="hidden">
-    <h1 id="profile-title">Vertel iets over jezelf</h1>
-    <p>Degene die jou trekt ziet dit, zodat die weet wat je leuk vindt.</p>
-    <label for="p-loves">Waar hou je van?</label>
-    <textarea id="p-loves" maxlength="300" placeholder="Bijv. voetbal, lezen, chocola…"></textarea>
-    <label for="p-wishes">Wat vind je leuk om te krijgen?</label>
-    <textarea id="p-wishes" maxlength="300" placeholder="Bijv. een boek, sokken, een bon…"></textarea>
-    <p class="error" id="err-profile"></p>
-    <button id="btn-profile">Opslaan en mijn lot trekken</button>
-  </section>
-
   <!-- 5. Lot -->
   <section id="s-lot" class="hidden">
     <h1>Dit is jouw lot</h1>
     <div class="lot" id="lot-name">…</div>
     <p>Hou het geheim! 🤫</p>
-    <div id="lot-info" class="info hidden"></div>
     <button id="btn-continue" class="hidden">Verder</button>
   </section>
 
   <!-- 6. Deelnemers -->
   <section id="s-people" class="hidden">
     <h1>Deelnemers</h1>
-    <h2>Jouw lot</h2>
-    <div id="people-lot" class="info"></div>
-    <h2>Iedereen in de groep</h2>
     <div class="big" id="people-count"></div>
     <ul id="people"></ul>
   </section>
@@ -125,17 +102,17 @@
 <script>
   // ====== VUL HIER JE EIGEN FIREBASE-GEGEVENS IN ======
   const firebaseConfig = {
-    apiKey: "AIzaSyDzImUsLNbmj6PpNBCrnrCu3ns_K8F6zUk",
-    authDomain: "lotenwebsite.firebaseapp.com",
-    databaseURL: "https://lotenwebsite-default-rtdb.europe-west1.firebasedatabase.app",
-    projectId: "lotenwebsite",
-    appId: "1:716187432239:web:fefbac3acc8d19c41addda"
+    apiKey: "JOUW_API_KEY",
+    authDomain: "JOUW_PROJECT.firebaseapp.com",
+    databaseURL: "https://JOUW_PROJECT-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "JOUW_PROJECT",
+    appId: "JOUW_APP_ID"
   };
   // =====================================================
 
   const $ = id => document.getElementById(id);
   const groupId = new URLSearchParams(location.search).get("g");
-  let db = null, group = null, offs = [], myIdx = -1, lotIdx = -1;
+  let db = null, group = null, offs = [];
 
   const configured = !/JOUW/.test(firebaseConfig.apiKey + firebaseConfig.databaseURL);
   let authReady = Promise.resolve(), currentGroup = null;
@@ -293,21 +270,36 @@
     const g = currentGroup;
     if (!g) return;
     if (!confirm('Groep "' + g.title + '" verwijderen? De link werkt daarna voor niemand meer.')) return;
-    $("btn-delete").disabled = true;
-    $("err-share").textContent = "";
+    const btn = $("btn-delete");
+    const err = $("err-share");
+    btn.disabled = true;
+    err.textContent = "";
     try {
       await authReady;
-      await db.ref("groups/" + g.id).remove();
+      const user = firebase.auth().currentUser;
+      if (!user) {
+        err.textContent = "Niet ingelogd bij Firebase. Zet bij Authentication → Sign-in method de 'Anoniem'-aanmelding aan en ververs de pagina.";
+        return;
+      }
+      const snap = await db.ref("groups/" + g.id).once("value");
+      const data = snap.val();
+      if (!data) { removeFromList(g.id); return; }          // bestaat al niet meer
+      if (data.owner && data.owner !== user.uid) {
+        err.textContent = "Deze groep is op een ander apparaat of in een andere browser gemaakt. Alleen daar kun je hem verwijderen.";
+        return;
+      }
+      try {
+        await db.ref("groups/" + g.id).remove();
+      } catch (e) {
+        err.textContent = "Firebase weigert het verwijderen. Heb je de nieuwe regels geplakt én op Publiceren geklikt? (" + e.message + ")";
+        if (confirm("Alleen uit je lijst halen?")) removeFromList(g.id);
+        return;
+      }
       removeFromList(g.id);
     } catch (e) {
-      // Oude groepen (zonder eigenaar) kunnen niet uit de database; dan alleen uit de lijst halen
-      if (confirm("Verwijderen uit de database is niet gelukt (" + e.message + "). Alleen uit je lijst halen?")) {
-        removeFromList(g.id);
-      } else {
-        $("err-share").textContent = "Niet verwijderd: " + e.message;
-      }
+      err.textContent = "Er ging iets mis: " + e.message;
     } finally {
-      $("btn-delete").disabled = false;
+      btn.disabled = false;
     }
   };
 
@@ -389,87 +381,29 @@
       }
 
       $("my-name").value = group.names[me];
-      myIdx = me;
-      lotIdx = group.assign[me];
-
-      // Eerst de vragen over jezelf invullen (als dat nog niet gedaan is), daarna pas het lot
-      if (!(group.profiles && group.profiles[me])) { showProfileForm(); return; }
-      revealLot();
+      const result = group.names[group.assign[me]];
+      show("s-lot");
+      $("btn-continue").classList.add("hidden");
+      let ticks = 0;
+      const timer = setInterval(() => {
+        $("lot-name").textContent = group.names[Math.floor(Math.random() * group.names.length)];
+        if (++ticks >= 14) {
+          clearInterval(timer);
+          $("lot-name").textContent = result;
+          $("btn-continue").classList.remove("hidden");
+        }
+      }, 90);
     } catch (e) {
       $("err-join").textContent = "Er ging iets mis: " + e.message;
     } finally {
       btn.disabled = false;
     }
   }
-  function showProfileForm() {
-    show("s-profile");
-    $("profile-title").textContent = "Vertel iets over jezelf, " + group.names[myIdx];
-    $("err-profile").textContent = "";
-  }
-
-  function revealLot() {
-    const result = group.names[lotIdx];
-    show("s-lot");
-    $("btn-continue").classList.add("hidden");
-    $("lot-info").classList.add("hidden");
-    let ticks = 0;
-    const timer = setInterval(() => {
-      $("lot-name").textContent = group.names[Math.floor(Math.random() * group.names.length)];
-      if (++ticks >= 14) {
-        clearInterval(timer);
-        $("lot-name").textContent = result;
-        $("btn-continue").classList.remove("hidden");
-        $("lot-info").classList.remove("hidden");
-        watchLotInfo($("lot-info"), lotIdx);
-      }
-    }, 90);
-  }
-
-  // Toont live wat de getrokken persoon heeft ingevuld (verschijnt vanzelf zodra die klaar is)
-  function watchLotInfo(box, idx) {
-    const name = group.names[idx];
-    listen(db.ref("groups/" + groupId + "/profiles/" + idx), snap => {
-      const p = snap.val();
-      box.innerHTML = "";
-      if (!p) {
-        const w = document.createElement("div");
-        w.className = "wait";
-        w.textContent = name + " heeft nog niets ingevuld. Zodra dat gebeurt zie je het hier meteen.";
-        box.appendChild(w);
-        return;
-      }
-      [["Waar " + name + " van houdt", p.loves], ["Wat " + name + " leuk vindt om te krijgen", p.wishes]].forEach(([q, a]) => {
-        const qd = document.createElement("div"); qd.className = "q"; qd.textContent = q;
-        const ad = document.createElement("div"); ad.className = "a"; ad.textContent = a || "-";
-        box.append(qd, ad);
-      });
-    });
-  }
-
-  $("btn-profile").onclick = async () => {
-    const loves = $("p-loves").value.trim(), wishes = $("p-wishes").value.trim();
-    if (!loves || !wishes) { $("err-profile").textContent = "Beantwoord allebei de vragen."; return; }
-    const btn = $("btn-profile");
-    btn.disabled = true;
-    $("err-profile").textContent = "";
-    try {
-      await db.ref("groups/" + groupId + "/profiles/" + myIdx).set({ loves: loves, wishes: wishes });
-      group.profiles = group.profiles || {};
-      group.profiles[myIdx] = { loves: loves, wishes: wishes };
-      revealLot();
-    } catch (e) {
-      $("err-profile").textContent = "Opslaan mislukt: " + e.message;
-    } finally {
-      btn.disabled = false;
-    }
-  };
-
   $("btn-go").onclick = startDraw;
   $("my-name").addEventListener("keydown", e => { if (e.key === "Enter") startDraw(); });
 
   $("btn-continue").onclick = () => {
     show("s-people");
-    watchLotInfo($("people-lot"), lotIdx);
     listen(db.ref("groups/" + groupId), snap => {
       const g = snap.val(); if (!g) return;
       $("people-count").textContent = countTrue(g.claims) + " van " + g.names.length + " lootjes getrokken";
