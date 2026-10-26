@@ -15,7 +15,10 @@
   h1 { margin:0 0 8px; font-size:1.6rem; }
   h2 { margin:24px 0 8px; font-size:1.05rem; }
   p { color:var(--muted); line-height:1.5; }
-  input { width:100%; padding:12px; margin:6px 0; border:1px solid var(--line); border-radius:10px; font-size:1rem; background:var(--bg); color:var(--text); }
+  input, textarea { width:100%; padding:12px; margin:6px 0; border:1px solid var(--line); border-radius:10px; font-size:1rem; background:var(--bg); color:var(--text); }
+  textarea { resize:vertical; font-family:inherit; }
+  label { display:block; margin-top:12px; font-weight:600; }
+  #lot-info { padding:12px 14px; margin:8px 0; }
   button { width:100%; padding:13px; margin-top:10px; border:0; border-radius:10px; font-size:1rem; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }
   button:disabled { opacity:.6; cursor:default; }
   button.danger { background:transparent; color:var(--accent); border:1px solid var(--accent); }
@@ -79,10 +82,23 @@
     <button id="btn-go">Door</button>
   </section>
 
+  <!-- 4b. Info over jezelf -->
+  <section id="s-info" class="hidden">
+    <h1>Vertel iets over jezelf</h1>
+    <p>Dit ziet degene die jou heeft getrokken, zodat die weet wat je leuk vindt.</p>
+    <label for="info-likes">Waar hou je van?</label>
+    <textarea id="info-likes" rows="2" placeholder="Bijv. koken, voetbal, boeken"></textarea>
+    <label for="info-wants">Wat vind je leuk om te krijgen?</label>
+    <textarea id="info-wants" rows="2" placeholder="Bijv. chocolade, een goed boek"></textarea>
+    <p class="error" id="err-info"></p>
+    <button id="btn-info">Opslaan en lot trekken</button>
+  </section>
+
   <!-- 5. Lot -->
   <section id="s-lot" class="hidden">
     <h1>Dit is jouw lot</h1>
     <div class="lot" id="lot-name">…</div>
+    <div class="panel hidden" id="lot-info"></div>
     <p>Hou het geheim! 🤫</p>
     <button id="btn-continue" class="hidden">Verder</button>
   </section>
@@ -115,7 +131,7 @@
   let db = null, group = null, offs = [];
 
   const configured = !/JOUW/.test(firebaseConfig.apiKey + firebaseConfig.databaseURL);
-  let authReady = Promise.resolve(), currentGroup = null;
+  let authReady = Promise.resolve(), currentGroup = null, meIdx = -1;
   if (configured) {
     try {
       firebase.initializeApp(firebaseConfig);
@@ -352,6 +368,52 @@
   }
   const deviceId = getDeviceId();
 
+  function showLotInfo(target, name) {
+    const box = $("lot-info");
+    box.classList.remove("hidden");
+    listen(db.ref("groups/" + groupId + "/info/" + target), snap => {
+      const v = snap.val();
+      box.innerHTML = "";
+      const head = document.createElement("div");
+      head.style.fontWeight = "700";
+      head.textContent = "Over " + name;
+      box.appendChild(head);
+      if (!v) {
+        const w = document.createElement("div");
+        w.className = "empty";
+        w.textContent = name + " heeft nog niets ingevuld. Zodra dat gebeurt, zie je het hier vanzelf.";
+        box.appendChild(w);
+        return;
+      }
+      [["Houdt van:", v.likes], ["Vindt leuk om te krijgen:", v.wants]].forEach(([label, text]) => {
+        const d = document.createElement("div");
+        d.style.margin = "8px 0";
+        const b = document.createElement("strong");
+        b.textContent = label + " ";
+        d.append(b, document.createTextNode(text || ""));
+        box.appendChild(d);
+      });
+    });
+  }
+
+  function revealLot(me) {
+    const target = group.assign[me];
+    const result = group.names[target];
+    show("s-lot");
+    $("btn-continue").classList.add("hidden");
+    $("lot-info").classList.add("hidden");
+    let ticks = 0;
+    const timer = setInterval(() => {
+      $("lot-name").textContent = group.names[Math.floor(Math.random() * group.names.length)];
+      if (++ticks >= 14) {
+        clearInterval(timer);
+        $("lot-name").textContent = result;
+        $("btn-continue").classList.remove("hidden");
+        showLotInfo(target, result);
+      }
+    }, 90);
+  }
+
   async function startDraw() {
     if (!group) return;
     const btn = $("btn-go");
@@ -381,24 +443,40 @@
       }
 
       $("my-name").value = group.names[me];
-      const result = group.names[group.assign[me]];
-      show("s-lot");
-      $("btn-continue").classList.add("hidden");
-      let ticks = 0;
-      const timer = setInterval(() => {
-        $("lot-name").textContent = group.names[Math.floor(Math.random() * group.names.length)];
-        if (++ticks >= 14) {
-          clearInterval(timer);
-          $("lot-name").textContent = result;
-          $("btn-continue").classList.remove("hidden");
-        }
-      }, 90);
+      meIdx = me;
+      const myInfo = group.info && group.info[me];
+      if (!myInfo) {
+        $("info-likes").value = "";
+        $("info-wants").value = "";
+        $("err-info").textContent = "";
+        $("btn-info").disabled = false;
+        show("s-info");
+        return;
+      }
+      revealLot(me);
     } catch (e) {
       $("err-join").textContent = "Er ging iets mis: " + e.message;
     } finally {
       btn.disabled = false;
     }
   }
+  $("btn-info").onclick = async () => {
+    const likes = $("info-likes").value.trim();
+    const wants = $("info-wants").value.trim();
+    const err = $("err-info");
+    if (!likes || !wants) { err.textContent = "Vul beide vragen in."; return; }
+    err.textContent = "";
+    $("btn-info").disabled = true;
+    try {
+      await db.ref("groups/" + groupId + "/info/" + meIdx).set({ likes: likes, wants: wants });
+      group = (await db.ref("groups/" + groupId).once("value")).val();
+      revealLot(meIdx);
+    } catch (e) {
+      err.textContent = "Opslaan mislukt: " + e.message + " (Staan de nieuwe regels met 'info' in Firebase en heb je op Publiceren geklikt?)";
+    } finally {
+      $("btn-info").disabled = false;
+    }
+  };
   $("btn-go").onclick = startDraw;
   $("my-name").addEventListener("keydown", e => { if (e.key === "Enter") startDraw(); });
 
