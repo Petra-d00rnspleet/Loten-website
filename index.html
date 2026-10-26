@@ -49,7 +49,9 @@
   .group .count { color:#ddd2ff; font-weight:700; white-space:nowrap; font-size:.9rem; }
   .empty { color:var(--silver-soft); padding:10px 0; font-size:.95rem; }
   .big { font-size:1.25rem; font-weight:700; color:var(--accent); margin:4px 0 12px; text-align:center; }
-  #lot-info { padding:12px 14px; margin:8px 0; }
+  .lot.small { font-size:1.9rem; padding:6px 0 12px; }
+  #lot-info { padding:12px 14px; margin:8px 0 4px; }
+  #s-people h2 { text-align:center; }
   ul { list-style:none; padding:0; margin:12px 0 0; }
   li { padding:10px 0; border-bottom:1px solid var(--line); }
   li:last-child { border:0; }
@@ -134,14 +136,17 @@
     <svg class="gift" aria-hidden="true"><use href="#gift"/></svg>
     <h1>Dit is jouw lot</h1>
     <div class="lot" id="lot-name">…</div>
-    <div class="panel hidden" id="lot-info"></div>
     <p>Hou het geheim! 🤫</p>
     <button id="btn-continue" class="hidden">Verder</button>
   </section>
 
   <!-- 6. Deelnemers -->
   <section id="s-people" class="hidden">
-    <h1>Deelnemers</h1>
+    <h1>Overzicht</h1>
+    <h2>Jouw lot</h2>
+    <div class="lot small" id="people-lot">…</div>
+    <div class="panel hidden" id="lot-info"></div>
+    <h2>Deelnemers</h2>
     <div class="big" id="people-count"></div>
     <ul id="people"></ul>
   </section>
@@ -167,7 +172,7 @@
   let db = null, group = null, offs = [];
 
   const configured = !/JOUW/.test(firebaseConfig.apiKey + firebaseConfig.databaseURL);
-  let authReady = Promise.resolve(), currentGroup = null, meIdx = -1;
+  let authReady = Promise.resolve(), currentGroup = null, meIdx = -1, lotTarget = -1, lotName = "";
   if (configured) {
     try {
       firebase.initializeApp(firebaseConfig);
@@ -438,7 +443,6 @@
     const result = group.names[target];
     show("s-lot");
     $("btn-continue").classList.add("hidden");
-    $("lot-info").classList.add("hidden");
     let ticks = 0;
     const timer = setInterval(() => {
       $("lot-name").textContent = group.names[Math.floor(Math.random() * group.names.length)];
@@ -446,7 +450,8 @@
         clearInterval(timer);
         $("lot-name").textContent = result;
         $("btn-continue").classList.remove("hidden");
-        showLotInfo(target, result);
+        lotTarget = target;
+        lotName = result;
       }
     }, 90);
   }
@@ -523,6 +528,8 @@
 
   $("btn-continue").onclick = () => {
     show("s-people");
+    $("people-lot").textContent = lotName;
+    showLotInfo(lotTarget, lotName);
     listen(db.ref("groups/" + groupId), snap => {
       const g = snap.val(); if (!g) return;
       $("people-count").textContent = countTrue(g.claims) + " van " + g.names.length + " lootjes getrokken";
